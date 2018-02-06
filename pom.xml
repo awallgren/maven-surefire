@@ -585,6 +585,8 @@
                   <exclude>src/main/resources/META-INF/services/org.apache.maven.surefire.providerapi.SurefireProvider
                   </exclude>
                   <exclude>DEPENDENCIES</exclude>
+                  <exclude>.m2/**</exclude>
+                  <exclude>.m2</exclude>
                 </excludes>
               </configuration>
             </execution>

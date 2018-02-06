@@ -26,16 +26,19 @@ properties(
     ]
 )
 
-def oses = ['windows']  // ['linux', 'windows']
-def mavens = env.BRANCH_NAME == 'master' ? ['3.2.x', '3.3.x', '3.5.x'] : ['3.5.x']
-def jdks = ['9'] // env.BRANCH_NAME == 'master' ? ['7', '8', '9', '10'] : ['10']
+final String NIX_LABEL = 'ubuntu-1'
+final String WIN_LABEL = 'Windows'
 
-def cmd = ['mvn']
-def options = ['-e', '-V', '-nsu']
-def optionsITs = ['-e', '-V', '-nsu', '-P', 'run-its']
-def goals = ['clean', 'install' , 'jacoco:report']
-def goalsITs = ['verify']
-def Map stages = [:]
+final def oses = ['linux', 'windows']
+final def mavens = ['3.2.x', '3.3.x', '3.5.x'] // env.BRANCH_NAME == 'master' ? ['3.2.x', '3.3.x', '3.5.x'] : ['3.5.x']
+final def jdks = ['7', '8', '9', '10'] // env.BRANCH_NAME == 'master' ? ['7', '8', '9', '10'] : ['10']
+
+final def cmd = ['mvn']
+final def options = ['-e', '-V', '-nsu']
+final def optionsITs = ['-e', '-V', '-nsu', '-P', 'run-its']
+final def goals = ['clean', 'install' , 'jacoco:report']
+final def goalsITs = ['verify']
+final def Map stages = [:]
 
 oses.eachWithIndex { os, indexOfOs ->
 
@@ -43,12 +46,11 @@ oses.eachWithIndex { os, indexOfOs ->
 
         jdks.eachWithIndex { jdk, indexOfJdk ->
 
-            def String label = jenkinsEnv.labelForOS(os);
-            def String jdkTestName = jenkinsEnv.jdkFromVersion(os, jdk)
-            def String jdkName = jenkinsEnv.jdkFromVersion(os, '8')
-            def String mvnName = jenkinsEnv.mvnFromVersion(os, maven)
-
-            def stageKey = "${os}-jdk${jdk}-maven${maven}"
+            final String label = jenkinsEnv.labelForOS(os);
+            final String jdkTestName = jenkinsEnv.jdkFromVersion(os, jdk)
+            final String jdkName = jenkinsEnv.jdkFromVersion(os, '8')
+            final String mvnName = jenkinsEnv.mvnFromVersion(os, maven)
+            final String stageKey = "${os}-jdk${jdk}-maven${maven}"
 
             if (label == null || jdkTestName == null || mvnName == null) {
                 println "Skipping ${stageKey} as unsupported by Jenkins Environment."
@@ -60,47 +62,51 @@ oses.eachWithIndex { os, indexOfOs ->
 
             stages[stageKey] = {
                 if (os == 'windows') {
-                    node("${env.WIN_LABEL}") {
+                    node(WIN_LABEL) {
                         try {
                             println "Basedir = ${pwd()}."
 
-                            def mvnLocalRepoDir
+                            def mvnLocalRepoDir = null
 
-                            dir('.repository') {
+                            dir('.m2') {
                                 mvnLocalRepoDir = "${pwd()}"
                             }
 
                             println "Maven Local Repository = ${mvnLocalRepoDir}."
+                            assert mvnLocalRepoDir != null : 'Local Maven Repository is undefined.'
 
-                            dir('build') {
-                                stage("checkout ${stageKey}") {
-                                    checkout scm
+                            stage("checkout ${stageKey}") {
+                                checkout scm
+                            }
+
+                            def jdkTestHome = resolveToolNameToJavaPath(jdkTestName, mvnName)
+                            def properties = ["\"-Djdk.home=${jdkTestHome}\"", "-Djacoco.skip=true"]
+                            println("Setting JDK for testing ${properties[0]}")
+
+                            stage("build ${stageKey}") {
+                                withMaven(jdk: jdkName, maven: mvnName,
+                                    mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx512m',
+                                    options: [
+                                            openTasksPublisher(disabled: true),
+                                            junitPublisher(disabled: true),
+                                            artifactsPublisher(disabled: true)
+                                ]) {
+                                    def script = cmd + options + goals + properties
+                                    bat script.join(' ')
                                 }
+                            }
 
-                                def jdkTestHome = resolveToolNameToJavaPath(jdkTestName, mvnName)
-                                def properties = ["\"-Djdk.home=${jdkTestHome}\"", "-Djacoco.skip=true"]
-                                println("Setting JDK for testing ${properties[0]}")
+                            def final propertiesITs = properties
 
-                                stage("build ${stageKey}") {
-                                    withMaven(jdk: jdkName, maven: mvnName,
-                                        mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx512m',
-                                        options: [
-                                            artifactsPublisher(disabled: true),
-                                    ]) {
-                                        def script = cmd + options + goals + properties
-                                        bat script.join(' ')
-                                    }
-                                }
-
-                                def propertiesITs = properties
-
-                                stage("build-failsafe-it ${stageKey}") {
+                            stage("build-failsafe-it ${stageKey}") {
 //                                    lock('maven-surefire-its') {
 //                                        timeout(time: 15, unit: 'MINUTES') {
 //                                            withMaven(jdk: jdkName, maven: mvnName,
 //                                                mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx512m',
 //                                                options: [
 //                                                    invokerPublisher(),
+//                                                    openTasksPublisher(disabled: true),
+//                                                    junitPublisher(disabled: true),
 //                                                    artifactsPublisher(disabled: true)
 //                                            ]) {
 //                                                def script = cmd + optionsITs + goalsITs + propertiesITs
@@ -108,19 +114,19 @@ oses.eachWithIndex { os, indexOfOs ->
 //                                            }
 //                                        }
 //                                    }
-                                }
                             }
                         } finally {
+//                            println(readFile('target/rat.txt'))
 //                            Wait for INFRA installation of Pipeline Utils, use fileExists()
-//                            if (fileExists('build/maven-failsafe-plugin/target/it') {
-//                                zip(zipFile: "it--maven-failsafe-plugin--${stageKey}.zip", dir: 'build/maven-failsafe-plugin/target/it', archive: true)
+//                            if (fileExists('maven-failsafe-plugin/target/it')) {
+//                                zip(zipFile: "it--maven-failsafe-plugin--${stageKey}.zip", dir: 'maven-failsafe-plugin/target/it', archive: true)
 //                            }
 //
-//                            if (fileExists('build/surefire-its/target') {
-//                                zip(zipFile: "it--surefire-its--${stageKey}.zip", dir: 'build/surefire-its/target', archive: true)
+//                            if (fileExists('surefire-its/target')) {
+//                                zip(zipFile: "it--surefire-its--${stageKey}.zip", dir: 'surefire-its/target', archive: true)
 //                            }
 
-//                            archiveArtifacts(artifacts: 'build/surefire-its/target/**/log.txt', allowEmptyArchive: true, fingerprint: true, onlyIfSuccessful: false)
+//                            archiveArtifacts(artifacts: 'surefire-its/target/**/log.txt', allowEmptyArchive: true, fingerprint: true, onlyIfSuccessful: false)
 
                             stage("cleanup ${stageKey}") {
                                 // clean up after ourselves to reduce disk space
@@ -129,60 +135,54 @@ oses.eachWithIndex { os, indexOfOs ->
                         }
                     }
                 } else {
-                    node("${env.NIX_LABEL}") {
+                    node(NIX_LABEL) {
                         try {
                             println "Basedir = ${pwd()}."
 
-                            def mvnLocalRepoDir
+                            def mvnLocalRepoDir = null
 
-                            dir('.repository') {
+                            dir('.m2') {
                                 mvnLocalRepoDir = "${pwd()}"
                             }
 
                             println "Maven Local Repository = ${mvnLocalRepoDir}."
+                            assert mvnLocalRepoDir != null : 'Local Maven Repository is undefined.'
 
-                            dir('build') {
-                                stage("checkout ${stageKey}") {
-                                    checkout scm
-                                }
+                            stage("checkout ${stageKey}") {
+                                checkout scm
+                            }
 
-                                def jdkTestHome = resolveToolNameToJavaPath(jdkTestName, mvnName)
-                                //https://github.com/jacoco/jacoco/issues/629
-                                def skipPlugins = jdk != '9'
-                                def properties = ["\"-Djdk.home=${jdkTestHome}\"", "-Djacoco.skip=${skipPlugins}"]
-                                println("Setting JDK for testing ${properties[0]}")
+                            def jdkTestHome = resolveToolNameToJavaPath(jdkTestName, mvnName)
+                            //https://github.com/jacoco/jacoco/issues/629
+                            def skipPlugins = jdk != '9'
+                            def properties = ["\"-Djdk.home=${jdkTestHome}\"", "-Djacoco.skip=${skipPlugins}"]
+                            println("Setting JDK for testing ${properties[0]}")
 
-                                stage("build ${stageKey}") {
-                                    withMaven(jdk: jdkName, maven: mvnName,
-                                        mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx1g',
-                                        options: [
+                            stage("build ${stageKey}") {
+                                withMaven(jdk: jdkName, maven: mvnName,
+                                    mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx1g',
+                                    options: [
                                             findbugsPublisher(disabled: skipPlugins),
-                                            openTasksPublisher(disabled: skipPlugins, ignoreCase: true,
-                                                               pattern: sourcesPatternCsv(),
-                                                               low: tasksViolationLow(),
-                                                               normal: tasksViolationNormal(),
-                                                               high: tasksViolationHigh()),
+                                            openTasksPublisher(disabled: true),
+                                            junitPublisher(disabled: true),
                                             artifactsPublisher(disabled: true)
-                                    ]) {
-                                        def script = cmd + options + goals + properties
-                                        sh script.join(' ')
-                                    }
+                                ]) {
+                                    def script = cmd + options + goals + properties
+                                    sh script.join(' ')
                                 }
+                            }
 
-                                def propertiesITs = [properties[0], '-Djacoco.skip=true']
+                            def final propertiesITs = [properties[0], '-Djacoco.skip=true']
 
-                                stage("build-failsafe-it ${stageKey}") {
+                            stage("build-failsafe-it ${stageKey}") {
 //                                    lock('maven-surefire-its') {
 //                                        timeout(time: 15, unit: 'MINUTES') {
 //                                            withMaven(jdk: jdkName, maven: mvnName,
 //                                                mavenLocalRepo: mvnLocalRepoDir, mavenOpts: '-Xmx1g',
 //                                                options: [
 //                                                    invokerPublisher(),
-//                                                    openTasksPublisher(disabled: true, ignoreCase: true,
-//                                                                       pattern: sourcesPatternCsv(),
-//                                                                       low: tasksViolationLow(),
-//                                                                       normal: tasksViolationNormal(),
-//                                                                       high: tasksViolationHigh()),
+//                                                    openTasksPublisher(disabled: true),
+//                                                    junitPublisher(disabled: true),
 //                                                    artifactsPublisher(disabled: true)
 //                                            ]) {
 //                                                def script = cmd + optionsITs + goalsITs + propertiesITs
@@ -190,10 +190,13 @@ oses.eachWithIndex { os, indexOfOs ->
 //                                            }
 //                                        }
 //                                    }
-                                }
                             }
                         } finally {
                             if (indexOfMaven == mavens.size() - 1 && jdk == '9') {
+                                openTasks(ignoreCase: true, canComputeNew: false, defaultEncoding: 'UTF-8',
+                                        pattern: sourcesPatternCsv(), high: tasksViolationHigh(),
+                                        normal: tasksViolationNormal(), low: tasksViolationLow())
+
                                 jacoco(changeBuildStatus: false,
                                        execPattern: '**/*.exec',
                                        sourcePattern: sourcesPatternCsv(),
@@ -209,19 +212,14 @@ oses.eachWithIndex { os, indexOfOs ->
                                 }
                             }
 
-//                            Wait for INFRA installation of Pipeline Utils, use fileExists()
-//                            if (fileExists('build/maven-failsafe-plugin/target/it') {
-//                                zip(zipFile: "it--maven-failsafe-plugin--${stageKey}.zip", dir: 'build/maven-failsafe-plugin/target/it', archive: true)
-//                            }
-//
-//                            if (fileExists('build/surefire-its/target') {
-//                                zip(zipFile: "it--surefire-its--${stageKey}.zip", dir: 'build/surefire-its/target', archive: true)
-//                            }
-//
-//                            sh 'tar czvf it1.tgz build/maven-failsafe-plugin/target/it'
-//                            sh 'tar czvf it2.tgz build/surefire-its/target'
-//                            archiveArtifacts(artifacts: '**/*.tgz', allowEmptyArchive: true, fingerprint: true, onlyIfSuccessful: false)
-//                            archiveArtifacts(artifacts: '*.tgz', allowEmptyArchive: true, fingerprint: true, onlyIfSuccessful: false)
+                            if (fileExists('maven-failsafe-plugin/target/it')) {
+                                sh "tar czvf failsafe-its-${stageKey}.tgz maven-failsafe-plugin/target/it"
+                            }
+
+                            if (fileExists('surefire-its/target')) {
+                                println 'Compress surefire-its'
+                                sh "tar czvf surefire-its-${stageKey}.tgz surefire-its/target"
+                            }
 
                             stage("cleanup ${stageKey}") {
                                 // clean up after ourselves to reduce disk space
@@ -295,7 +293,7 @@ def resolveToolNameToJavaPath(jdkToolName, mvnName) {
 }
 
 @NonCPS
-def sourcesPatternCsv() {
+static def sourcesPatternCsv() {
     return '**/maven-failsafe-plugin/src/main/java,' +
             '**/maven-surefire-common/src/main/java,' +
             '**/maven-surefire-plugin/src/main/java,' +
@@ -310,7 +308,7 @@ def sourcesPatternCsv() {
 }
 
 @NonCPS
-def classPatternCsv() {
+static def classPatternCsv() {
     return '**/maven-failsafe-plugin/target/classes,' +
             '**/maven-surefire-common/target/classes,' +
             '**/maven-surefire-plugin/target/classes,' +
@@ -325,23 +323,23 @@ def classPatternCsv() {
 }
 
 @NonCPS
-def tasksViolationLow() {
+static def tasksViolationLow() {
     return '@SuppressWarnings'
 }
 
 @NonCPS
-def tasksViolationNormal() {
+static def tasksViolationNormal() {
     return 'TODO,FIXME,@deprecated'
 }
 
 @NonCPS
-def tasksViolationHigh() {
+static def tasksViolationHigh() {
     return 'finalize(),Locale.setDefault,TimeZone.setDefault,\
 System.out,System.err,System.setOut,System.setErr,System.setIn,System.exit,System.gc,System.runFinalization,System.load'
 }
 
 @NonCPS
-def testReportsPatternCsv() {
+static def testReportsPatternCsv() {
     return '**/maven-failsafe-plugin/target/surefire-reports/*.xml,' +
             '**/maven-surefire-common/target/surefire-reports/*.xml,' +
             '**/maven-surefire-plugin/target/surefire-reports/*.xml,' +
